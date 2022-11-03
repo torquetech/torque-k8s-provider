@@ -6,6 +6,7 @@
 
 import base64
 import json
+import sys
 
 import kubernetes
 
@@ -80,9 +81,7 @@ class V1Provider(v1.provider.Provider):
         """TODO"""
 
         with self.context as ctx:
-            ctx.set_data("state",
-                         v1.utils.fqcn(self),
-                         self._current_state)
+            ctx.set_data("state", v1.utils.fqcn(self), self._current_state)
 
     def _connect(self):
         """TODO"""
@@ -130,18 +129,51 @@ class V1Provider(v1.provider.Provider):
                 }
             })
 
+    def _update_object(self, name: str):
+        """TODO"""
+
+        old_obj = self._current_state.get(name)
+        obj = v1.utils.resolve_futures(self._new_state.get(name))
+
+        if old_obj == obj:
+            return
+
+        if not self.configuration["quiet"]:
+            diff = v1.utils.diff_objects(name, old_obj, obj)
+            print(diff, file=sys.stdout)
+
+        k8slib.update_object(self._client, obj)
+        self._current_state[name] = obj
+
+    def _delete_object(self, name: str):
+        """TODO"""
+
+        obj = self._current_state.get(name)
+
+        def _delete_object():
+            if not self.configuration["quiet"]:
+                diff = v1.utils.diff_objects(name, obj, {})
+                print(diff, file=sys.stdout)
+
+            k8slib.delete_object(self._client, obj)
+            self._current_state.pop(name)
+
+        with self.context as ctx:
+            ctx.add_hook("gc", _delete_object)
+
     def _apply(self):
         """TODO"""
 
         try:
             self._connect()
 
-            self._setup_container_registry()
+            if self._namespaces:
+                self._setup_container_registry()
 
-            k8slib.apply(self._client,
-                         self._current_state,
-                         self._new_state,
-                         self.configuration["quiet"])
+            v1.utils.apply_objects(self._current_state,
+                                   self._new_state,
+                                   self._update_object,
+                                   self._delete_object)
 
         finally:
             self._store_state()
@@ -152,19 +184,16 @@ class V1Provider(v1.provider.Provider):
         try:
             self._connect()
 
-            k8slib.apply(self._client,
-                         self._current_state,
-                         {},
-                         self.configuration["quiet"])
+            v1.utils.apply_objects(self._current_state,
+                                   {},
+                                   self._update_object,
+                                   self._delete_object)
 
         except ClusterNotInitialized:
             pass
 
         finally:
             self._store_state()
-
-        with self.context as ctx:
-            ctx.set_data("parameters", v1.utils.fqcn(self), {})
 
     def add_object(self, obj: dict[str, object]):
         """TODO"""
