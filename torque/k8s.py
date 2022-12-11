@@ -4,10 +4,6 @@
 
 """TODO"""
 
-import base64
-import json
-import sys
-
 import kubernetes
 
 from torque import container_registry
@@ -26,13 +22,6 @@ class V1ClientInterface(v1.bond.Interface):
         """TODO"""
 
 
-class V1VolumeInterface(v1.bond.Interface):
-    """TODO"""
-
-    def create(self, name: str, size: str):
-        """TODO"""
-
-
 class V1Provider(v1.provider.Provider):
     """TODO"""
 
@@ -44,7 +33,7 @@ class V1Provider(v1.provider.Provider):
             "quiet": bool,
             v1.schema.Optional("namespace"): str,
             v1.schema.Optional("overrides"): dict
-       }
+        }
     }
 
     @classmethod
@@ -57,8 +46,8 @@ class V1Provider(v1.provider.Provider):
                 "required": True
             },
             "cr": {
-                "interface": container_registry.V1ClientInterface,
-                "required": True
+                "interface": container_registry.V1Provider,
+                "required": False
             }
         }
 
@@ -71,20 +60,17 @@ class V1Provider(v1.provider.Provider):
         self._new_state = {}
 
         self._namespaces = set()
-
         self._namespace = self.configuration.get("namespace", self.context.deployment_name)
-        self._namespace = self._namespace.replace(".", "-")
-        self._namespace = self._namespace.replace("_", "-")
 
         self._load_state()
 
-        with self.context as ctx:
-            ctx.add_hook("apply", self._apply)
-            ctx.add_hook("delete", self._delete)
+        with self as p:
+            p.add_hook("apply", self._apply)
+            p.add_hook("delete", self._delete)
 
         self._setup_namespace()
 
-    def _load_state(self) -> dict[str, object]:
+    def _load_state(self):
         """TODO"""
 
         with self.context as ctx:
@@ -118,29 +104,10 @@ class V1Provider(v1.provider.Provider):
     def _setup_container_registry(self):
         """TODO"""
 
-        auth = self.interfaces.cr.auth()
+        if not self._namespaces:
+            return
 
-        server = auth["server"]
-        username = auth["username"]
-        password = auth["password"]
-
-        auth = f"{username}:{password}"
-
-        auth = auth.encode()
-        auth = base64.b64encode(auth)
-        auth = auth.decode()
-
-        dockerconfig = json.dumps({
-            "auths": {
-                server: {
-                    "auth": auth
-                }
-            }
-        })
-
-        dockerconfig = dockerconfig.encode()
-        dockerconfig = base64.b64encode(dockerconfig)
-        dockerconfig = dockerconfig.decode()
+        dockerconfig = self.interfaces.cr.login()
 
         for namespace in self._namespaces:
             self.add_object({
@@ -155,6 +122,8 @@ class V1Provider(v1.provider.Provider):
                     ".dockerconfigjson": dockerconfig
                 }
             })
+
+        self.interfaces.cr.push_images()
 
     def _update_object(self, name: str):
         """TODO"""
@@ -171,8 +140,7 @@ class V1Provider(v1.provider.Provider):
             return
 
         if not self.configuration["quiet"]:
-            diff = v1.utils.diff_objects(name, old_obj, obj)
-            print(diff, file=sys.stdout)
+            print(v1.utils.diff_objects(name, old_obj, obj))
 
         k8slib.update_object(self._client, obj)
         self._current_state[name] = obj
@@ -184,14 +152,13 @@ class V1Provider(v1.provider.Provider):
 
         def _delete_object():
             if not self.configuration["quiet"]:
-                diff = v1.utils.diff_objects(name, obj, {})
-                print(diff, file=sys.stdout)
+                print(v1.utils.diff_objects(name, obj, {}))
 
             k8slib.delete_object(self._client, obj)
             self._current_state.pop(name)
 
-        with self.context as ctx:
-            ctx.add_hook("gc", _delete_object)
+        with self as p:
+            p.add_hook("collect-garbage", _delete_object)
 
     def _apply(self):
         """TODO"""
@@ -199,7 +166,7 @@ class V1Provider(v1.provider.Provider):
         try:
             self._connect()
 
-            if self._namespaces:
+            if self.interfaces.cr:
                 self._setup_container_registry()
 
             v1.utils.apply_objects(self._current_state,
@@ -227,7 +194,7 @@ class V1Provider(v1.provider.Provider):
         finally:
             self._store_state()
 
-    def add_object(self, obj: dict[str, object]):
+    def add_object(self, obj: dict[str, object]) -> str:
         """TODO"""
 
         with self._lock:
@@ -244,15 +211,36 @@ class V1Provider(v1.provider.Provider):
 
             self._new_state[name] = obj
 
-    def add_container_registry_to(self, namespace: str):
+            return name
+
+    def register_image(self, image: str, namespace: str) -> str:
         """TODO"""
 
-        self._namespaces.add(namespace)
+        if not self.interfaces.cr:
+            raise v1.exceptions.RuntimeError("container registry not initialized")
+
+        with self._lock:
+            self._namespaces.add(namespace)
+
+        return self.interfaces.cr.register_image(image)
 
     def namespace(self) -> str:
         """TODO"""
 
         return self._namespace
+
+    def object(self, name: str) -> dict[str, object]:
+        """TODO"""
+
+        if name not in self._new_state:
+            raise v1.exceptions.RuntimeError(f"{name}: object not found")
+
+        return self._new_state[name]
+
+    def objects(self) -> dict[str, object]:
+        """TODO"""
+
+        return self._new_state
 
 
 repository = {
