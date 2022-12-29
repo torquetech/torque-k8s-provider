@@ -2,7 +2,7 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-"""TODO"""
+"""DOCSTRING"""
 
 import kubernetes
 
@@ -12,18 +12,18 @@ from torque import v1
 
 
 class ClusterNotInitialized(v1.exceptions.TorqueException):
-    """TODO"""
+    """DOCSTRING"""
 
 
 class V1ClientInterface(v1.bond.Interface):
-    """TODO"""
+    """DOCSTRING"""
 
-    def connect(self) -> kubernetes.client.ApiClient:
-        """TODO"""
+    def kubeconfig(self) -> dict[str, object]:
+        """DOCSTRING"""
 
 
 class V1Provider(v1.provider.Provider):
-    """TODO"""
+    """DOCSTRING"""
 
     CONFIGURATION = {
         "defaults": {
@@ -38,7 +38,7 @@ class V1Provider(v1.provider.Provider):
 
     @classmethod
     def on_requirements(cls) -> dict:
-        """TODO"""
+        """DOCSTRING"""
 
         return {
             "client": {
@@ -54,6 +54,7 @@ class V1Provider(v1.provider.Provider):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
+        self._kubeconfig = None
         self._client = None
 
         self._current_state = {}
@@ -65,30 +66,31 @@ class V1Provider(v1.provider.Provider):
         self._load_state()
 
         with self as p:
+            p.add_hook("apply-objects", self._apply_namespace)
+            p.add_hook("apply-utils", self._apply_container_registry)
             p.add_hook("apply", self._apply)
             p.add_hook("delete", self._delete)
 
-        self._setup_namespace()
-
     def _load_state(self):
-        """TODO"""
+        """DOCSTRING"""
 
         with self.context as ctx:
             self._current_state = ctx.get_data("state", v1.utils.fqcn(self)) or {}
 
     def _store_state(self):
-        """TODO"""
+        """DOCSTRING"""
 
         with self.context as ctx:
             ctx.set_data("state", v1.utils.fqcn(self), self._current_state)
 
     def _connect(self):
-        """TODO"""
+        """DOCSTRING"""
 
-        self._client = self.interfaces.client.connect()
+        self._kubeconfig = self.interfaces.client.kubeconfig()
+        self._client = kubernetes.config.new_client_from_config_dict(self._kubeconfig)
 
-    def _setup_namespace(self):
-        """TODO"""
+    def _apply_namespace(self):
+        """DOCSTRING"""
 
         if self._namespace == "default":
             return
@@ -101,8 +103,8 @@ class V1Provider(v1.provider.Provider):
             }
         })
 
-    def _setup_container_registry(self):
-        """TODO"""
+    def _apply_container_registry(self):
+        """DOCSTRING"""
 
         if not self._namespaces:
             return
@@ -126,7 +128,7 @@ class V1Provider(v1.provider.Provider):
         self.interfaces.cr.push_images()
 
     def _update_object(self, name: str):
-        """TODO"""
+        """DOCSTRING"""
 
         overrides = self.configuration.get("overrides", {})
         overrides = overrides.get(name, {})
@@ -146,7 +148,7 @@ class V1Provider(v1.provider.Provider):
         self._current_state[name] = obj
 
     def _delete_object(self, name: str):
-        """TODO"""
+        """DOCSTRING"""
 
         obj = self._current_state.get(name)
 
@@ -161,13 +163,10 @@ class V1Provider(v1.provider.Provider):
             p.add_hook("collect-garbage", _delete_object)
 
     def _apply(self):
-        """TODO"""
+        """DOCSTRING"""
 
         try:
             self._connect()
-
-            if self.interfaces.cr:
-                self._setup_container_registry()
 
             v1.utils.apply_objects(self._current_state,
                                    self._new_state,
@@ -178,7 +177,7 @@ class V1Provider(v1.provider.Provider):
             self._store_state()
 
     def _delete(self):
-        """TODO"""
+        """DOCSTRING"""
 
         try:
             self._connect()
@@ -194,8 +193,13 @@ class V1Provider(v1.provider.Provider):
         finally:
             self._store_state()
 
+    def kubeconfig(self) -> dict[str, object]:
+        """DOCSTRING"""
+
+        return self._kubeconfig
+
     def add_object(self, obj: dict[str, object]) -> str:
-        """TODO"""
+        """DOCSTRING"""
 
         with self._lock:
             if "namespace" in obj["metadata"]:
@@ -214,7 +218,7 @@ class V1Provider(v1.provider.Provider):
             return name
 
     def register_image(self, image: str, namespace: str) -> str:
-        """TODO"""
+        """DOCSTRING"""
 
         if not self.interfaces.cr:
             raise v1.exceptions.RuntimeError("container registry not initialized")
@@ -225,12 +229,12 @@ class V1Provider(v1.provider.Provider):
         return self.interfaces.cr.register_image(image)
 
     def namespace(self) -> str:
-        """TODO"""
+        """DOCSTRING"""
 
         return self._namespace
 
     def object(self, name: str) -> dict[str, object]:
-        """TODO"""
+        """DOCSTRING"""
 
         if name not in self._new_state:
             raise v1.exceptions.RuntimeError(f"{name}: object not found")
@@ -238,7 +242,7 @@ class V1Provider(v1.provider.Provider):
         return self._new_state[name]
 
     def objects(self) -> dict[str, object]:
-        """TODO"""
+        """DOCSTRING"""
 
         return self._new_state
 
